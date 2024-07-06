@@ -1,0 +1,1259 @@
+##################
+
+#Load Packages 
+
+#################
+
+
+
+library(readr)
+library(fields)
+library(rasterVis)
+library(landscapemetrics)
+library(raster)
+library(terra)
+library(stringr)
+library(rasterVis)
+library(sf)
+library(sp)
+library(lattice)
+library(tidyverse)
+library(dplyr)
+library(ggspatial)
+
+
+
+
+
+
+##################
+
+
+
+
+##################
+
+#Spatial Analysis
+
+#################
+
+
+
+#################
+
+
+
+
+#Data available at 
+#https://zenodo.org/record/5554864
+
+# Specify the directory containing the data
+file_path_master_NA <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/master/master.csv"
+
+# Import the master_NA data 
+master_NA <- read.csv(file_path_master_NA, , header = TRUE, stringsAsFactors = FALSE)
+
+#Take only the revelant data 
+master_NA <- master_NA[,1:19]
+
+#"lutfire"      "plotcode"     "village.site" "longitude"    "latitude"     "bird.sp.a"    "bird.sp.e"   
+#"butf.sp.e"    "butf.sp.a"    "hpla.sp.e"    "hpla.sp.a"    "rept.sp.e"    "rept.sp.a"    "tree.sp.a"   
+# "tree.sp.e"    "ant.sp.a"     "ant.sp.e"     "amph.sp.e"    "amph.sp.a" 
+
+
+#####################
+
+#Import raster maps 
+
+####################
+
+
+# Specify the directory containing the maps
+directory <- "/Users/hugo/Desktop/madagascar/madmaps_files/Vieilledent/"
+
+# Specify the years of interest
+years <- c(1973, 1990, 2000, 2010, 2015, 2017)
+
+# Create an empty list to store the raster objects
+raster_list <- list()
+
+# Read the TIFF files for each year and store as raster objects
+for (year in years) {
+  # Construct the file path
+  file_path_map <- file.path(directory, paste0("for", year, ".tif"))
+  
+  # Read the raster file
+  raster_data <- raster(file_path_map)
+  
+  # Add the raster object to the list
+  raster_list[[as.character(year)]] <- raster_data
+}
+
+
+
+# Assign the raster objects outside the list
+for (year in years) {
+  # Check if the raster object exists for the year
+  if (as.character(year) %in% names(raster_list)) {
+    # Retrieve the raster object for the year
+    raster_data <- raster_list[[as.character(year)]]
+    
+    # Assign the raster object an identity outside the list
+    assign(paste0("raster_", year), raster_data)
+  }
+}
+
+
+
+######################################
+
+## Convert long/lat coordinates to utm
+
+######################################
+
+
+
+# Extract the longitude and latitude coordinates from the data frame of the master_NA
+lonlat_points <- SpatialPoints(coords = master_NA[, c("longitude", "latitude")], proj4string = CRS("+proj=longlat +datum=WGS84"))
+
+# Define the target projection (UTM zone 38S)
+utm_proj <- CRS("+proj=utm +zone=38 +south +datum=WGS84")
+
+# Convert the coordinates to UTM (Easting, Northing)
+utm_coords <- spTransform(lonlat_points, utm_proj)
+
+# Extract the UTM coordinates
+easting <- coordinates(utm_coords)[, 1]
+northing <- coordinates(utm_coords)[, 2]
+
+# Extract the required columns from master_NA
+plotcode_coords <- master_NA[, c("plotcode", "village.site")]
+
+# Create the "easting" and "northing" columns with decimal precision
+plotcode_coords$easting <- easting
+plotcode_coords$northing <- northing
+
+# Create a SpatialPoints object from the plot coordinates
+plot_points <- SpatialPoints(plotcode_coords[, c("easting", "northing")])
+
+
+##############
+
+# Crop rasters
+
+##############
+
+
+# Load the necessary packages
+library(sf)
+library(raster)
+
+# Convert the plot_points to sf object
+plot_points_sf <- st_as_sf(plot_points)
+
+# Create a buffer around the plot points
+buffered_points <- st_buffer(plot_points_sf, dist = 10000)
+
+# Convert the buffered points to SpatialPolygons
+buffered_polygons <- as(buffered_points, "Spatial")
+
+# Get the extent of the buffered polygons
+extended_extent <- extent(buffered_polygons)
+
+# Define the list of years
+years <- c(1973, 1990, 2000, 2010, 2015, 2017)
+
+# Create an empty list to store the cropped rasters
+cropped_rasters <- list()
+
+# Loop through each year and crop the corresponding raster
+for (i in 1:length(years)) {
+  # Get the raster based on the year
+  raster_year <- paste("raster_", years[i], sep = "")
+  
+  # Crop the raster using the extended extent
+  cropped_raster <- crop(get(raster_year), extended_extent)
+  
+  # Name the cropped raster based on the year
+  cropped_rasters[[i]] <- cropped_raster
+  raster_name <- paste("cropped_raster", years[i], sep = "_")
+  assign(raster_name, cropped_raster)
+}
+
+###################################
+
+#Time_since_deforestation_raster
+
+###################################
+
+# Create a copy of cropped_raster_1973 and assign NA to cells with value 5
+cropped_raster_1973_unclass_to_not_forest <- cropped_raster_1973
+cropped_raster_1973_unclass_to_not_forest[cropped_raster_1973_unclass_to_not_forest == 5] <- NA
+
+
+# Create the time_since_deforestation_NA raster
+time_since_deforestation_NA <- cropped_raster_2017
+
+
+# Assign time_since_deforestation_value = NA to forested cells in 2017
+time_since_deforestation_NA[cropped_raster_2017 == 1] <- NA
+
+# Assign time_since_deforestation_value = 2 to non-forested cells in 2017 but forested in 2015
+time_since_deforestation_NA[is.na(cropped_raster_2017) & cropped_raster_2015 == 1] <- 2
+
+# Assign time_since_deforestation_value = 7 to non-forested cells in 2017, 2015, but forested in 2010
+time_since_deforestation_NA[is.na(cropped_raster_2017) & is.na(cropped_raster_2015) & cropped_raster_2010 == 1] <- 7
+
+# Assign time_since_deforestation_value = 17 to non-forested cells in 2017, 2015, 2010, but forested in 2000
+time_since_deforestation_NA[is.na(cropped_raster_2017) & is.na(cropped_raster_2015) & is.na(cropped_raster_2010) & cropped_raster_2000 == 1] <- 17
+
+# Assign time_since_deforestation_value = 27 to non-forested cells in 2017, 2015, 2010, 2000, but forested in 1990
+time_since_deforestation_NA[is.na(cropped_raster_2017) & is.na(cropped_raster_2015) & is.na(cropped_raster_2010) & is.na(cropped_raster_2000) & cropped_raster_1990 == 1] <- 27
+
+# Assign time_since_deforestation_value = 44 to non-forested cells in 2017, 2015, 2010, 2000, 1990, but forested in 1973
+time_since_deforestation_NA[is.na(cropped_raster_2017) & is.na(cropped_raster_2015) & is.na(cropped_raster_2010) & is.na(cropped_raster_2000) & is.na(cropped_raster_1990) & cropped_raster_1973_unclass_to_not_forest == 1] <- 44
+
+# Set cells not present in 2017, 2015, 2010, 2000, 1990, or 1973 as 60
+time_since_deforestation_NA[is.na(cropped_raster_2017) & is.na(cropped_raster_2015) & is.na(cropped_raster_2010) & is.na(cropped_raster_2000) & is.na(cropped_raster_1990) & is.na(cropped_raster_1973_unclass_to_not_forest)] <- 60
+
+
+###############################################################
+
+#Time since deforestation means extraction by plot and Radii  
+
+###############################################################
+
+# Load necessary library
+library(sf)
+
+# Initialize a data frame to store the means
+td_means_NA_df <- data.frame()
+
+# Loop over all plotcodes in plotcode_coords
+for (selected_plotcode in unique(plotcode_coords$plotcode)) {
+  # Select the plotcode and associated spatial object
+  selected_coords <- plotcode_coords[plotcode_coords$plotcode == selected_plotcode, c("easting", "northing")]
+  
+  # Zoom in on the selected plotcode
+  e <- extent(selected_coords$easting - 1000, selected_coords$easting + 1000, selected_coords$northing - 1000, selected_coords$northing + 1000)
+  zoomed_raster <- crop(time_since_deforestation_NA, e)
+  
+  # Create a SpatialPoints object for the central point of the plot
+  plot_point <- SpatialPoints(selected_coords[, c("easting", "northing")])
+  
+  # Convert SpatialPoints to sf object
+  plot_point_sf <- st_as_sf(plot_point)
+  
+  # Initialize a vector to store the means
+  td_means <- numeric(10)
+  
+  # Loop over the radii of the circles
+  for (i in seq(100, 1000, by = 100)) {
+    # Create a circular polygon with radius i
+    circle <- st_buffer(plot_point_sf, dist = i)
+    
+    # Extract the values of the cells within the circle
+    values <- raster::extract(zoomed_raster, circle)
+    
+    # Calculate the mean of the values and store in the means vector
+    td_means[i/100] <- mean(values[[1]], na.rm = TRUE)
+  }
+  
+  # Create a data frame to store the means for the current plotcode
+  td_means_NA_df <- rbind(td_means_NA_df, data.frame(plotcode = selected_plotcode,
+                                                     t(sapply(seq(100, 1000, by = 100), function(x) setNames(td_means[x/100], paste0("mean_td_", x, "m"))))))
+}
+
+
+
+#####################################
+
+#Current forest cover means by Radii 
+
+####################################
+
+# Replace NA values with 0
+cropped_raster_2017_extract <- cropped_raster_2017
+cropped_raster_2017_extract[is.na(cropped_raster_2017)] <- 0
+
+# Initialize a data frame to store the means
+fc_means_NA_df <- data.frame()
+
+# Loop over all plot codes in plotcode_coords
+for (selected_plotcode in unique(plotcode_coords$plotcode)) {
+  # Select the plot code and associated spatial object
+  selected_coords <- plotcode_coords[plotcode_coords$plotcode == selected_plotcode, c("easting", "northing")]
+  
+  # Zoom in on the selected plot code
+  e <- extent(selected_coords$easting - 1000, selected_coords$easting + 1000, selected_coords$northing - 1000, selected_coords$northing + 1000)
+  zoomed_raster_2017 <- crop(cropped_raster_2017_extract, e)
+  
+  # Create a SpatialPoints object for the central point of the plot
+  plot_point <- SpatialPoints(selected_coords[, c("easting", "northing")])
+  
+  # Convert SpatialPoints to sf object
+  plot_point_sf <- st_as_sf(plot_point)
+  
+  # Initialize a vector to store the means
+  fc_means <- numeric(10)
+  
+  # Loop over the radii of the circles
+  for (i in seq(100, 1000, by = 100)) {
+    # Create a circular polygon with radius i
+    circle <- st_buffer(plot_point_sf, dist = i)
+    
+    # Extract the values of the cells within the circle
+    values <- raster::extract(zoomed_raster_2017, circle)
+    
+    # Calculate the mean of the values and store in the means vector
+    fc_means[i/100] <- mean(values[[1]], na.rm = TRUE) * 100
+  }
+  
+  # Create a data frame to store the means for the current plot code
+  fc_means_NA_df <- rbind(fc_means_NA_df, data.frame(plotcode = selected_plotcode,
+                                                     t(sapply(seq(100, 1000, by = 100), function(x) setNames(fc_means[x/100], paste0("mean_fc_", x, "m"))))))
+}
+
+##########################
+
+#Join means of td and fc 
+
+##########################
+
+td_fc_means_NA <- left_join(td_means_NA_df, fc_means_NA_df, by = "plotcode")
+master_NA <- left_join(master_NA, td_fc_means_NA, by = "plotcode")
+
+
+
+
+
+
+
+
+
+
+###############################
+
+# Add more plot characteristics
+
+###############################
+
+#"Plotcode"                  "Land use type"             "Village"                  
+#"Burned yes.no"             "Stem density per hectare"  "Mean basal area [m�/ha]"  
+# "Mean canopy closure [%]"   "Mean LAI [m�/m�]"          "Species richness per plot"
+# "Endemic tree species [%]" 
+
+
+
+# Set the file path
+file_path_trees_in_vanilla <- "//Users/hugo/Desktop/madagascar/Biodiversity_data/Plots/trees in vanilla agroforestry_Appendix_S3.csv"
+
+# Read the CSV file into a data frame
+Plot_characteristics <- read.csv(file_path_trees_in_vanilla)
+
+# Keep only the rows from the 6th row onward
+Plot_characteristics <- Plot_characteristics[6:nrow(Plot_characteristics), ]
+
+# Reset the row names of the data frame
+rownames(Plot_characteristics) <- NULL
+
+# Assign the first row as column names
+colnames(Plot_characteristics) <- as.character(unlist(Plot_characteristics[1,]))
+
+# Remove the first row from the data frame
+Plot_characteristics <- Plot_characteristics[-1, ]
+
+# Rename the Plotcode column to plotcode in the Plot_characteristics data frame
+colnames(Plot_characteristics)[colnames(Plot_characteristics) == "Plotcode"] <- "plotcode"
+
+
+####################
+
+# Merge to master_NA 
+
+####################
+
+
+# ME-PF1 from "trees in vanilla agroforestry_Appendix_S3" = ME-OGF1 from "master_NA"
+# MT-PF1 from "trees in vanilla agroforestry_Appendix_S3" = MT-OGF1 from "master_NA"
+
+
+Plot_characteristics$plotcode[1:10] <- master_NA$plotcode[1:10]
+
+
+# Merge the Plot_characteristics and other_df data frames by their plotcode column
+master_NA <- merge(master_NA, Plot_characteristics, by = "plotcode", all = TRUE)
+
+
+#########
+
+#WARNING
+
+#########
+
+# There is 22 missing plots in Plot_characteristics compared to master_NA, 
+# V2-VM, V24-VL were withdrew from the study by the farmers 
+# The 10 rice paddys were not included in the vanilla study 
+# The 10 herbaceous fallows were not included in the vanilla study 
+
+
+
+################
+
+#Data imputation 
+
+################
+
+
+###################
+
+#Herbaceous Fallows 
+
+###################
+
+
+
+# Select the rows where the plot code ends with "HF"
+hf_rows <- grepl("HF$", master_NA$lutfire)
+
+# Fill in the missing values with 0 for columns 5 to 10 for 
+# "Stem density per hectare"  "Mean basal area [m�/ha]" 
+#  "Mean canopy closure [%]"   "Mean LAI [m�/m�]"   
+#  "Species richness per plot" "Endemic tree species [%]" 
+
+master_NA[hf_rows, 43:48] <- 0
+
+# Fill in the "Land use type" column with "Herbaceous fallow" for the selected rows
+master_NA[hf_rows, "Land use type"] <- "Herbaceous fallow"
+
+# Fill in the "Burned yes.no" column with "no" for the selected rows
+master_NA[hf_rows, "Burned yes.no"] <- "yes"
+
+
+#Village names
+
+
+# Fill in the "Village" column with the value from the same column but one row below it for all rows where the plot code ends with "HF"
+master_NA <- master_NA %>%
+  mutate(Village = ifelse(grepl("HF$", plotcode), lag(Village), Village))
+
+
+###########
+
+#Rice Paddy 
+
+###########
+
+
+# Select the rows where the plot code ends with "RP"
+rp_rows <- grepl("RP$", master_NA$lutfire)
+
+# Fill in the missing values with 0 for columns 5 to 10
+master_NA[rp_rows, 43:48] <- 0
+
+# Fill in the "Land use type" column with "Herbaceous fallow" for the selected rows
+master_NA[rp_rows, "Land use type"] <- "Rice Paddy"
+
+# Fill in the "Burned yes.no" column with "no" for the selected rows
+master_NA[rp_rows, "Burned yes.no"] <- "yes"
+
+# Fill in the "Village" column with the value from the same column but one row below it for all rows where the plot code ends with "RP"
+master_NA <- master_NA %>%
+  mutate(Village = ifelse(grepl("RP$", plotcode), lag(Village), Village))
+
+
+
+################
+
+#Mean by lutfire 
+#V2-VM
+#V24-VL
+
+###############
+
+
+
+# Select the rows where the plot code ends with VFLW
+VFLW_rows <- which(grepl("VFLW$", master_NA$lutfire))
+
+#convert to numeric 
+
+master_NA[, 43:48] <- lapply(master_NA[, 43:48], as.numeric)
+
+# Calculate the mean of columns 5 to 10 for all rows where the lutfire ends with VFLW
+VFLW_means <- colMeans(master_NA[VFLW_rows, 43:48], na.rm = TRUE)
+
+
+#V2-VM
+
+# Select the row where the plot code is "V2-VM"
+v2_vm_row <- which(master_NA$plotcode == "V2-VM")
+
+# Fill in columns 5 to 10 with the calculated means for the selected row
+master_NA[v2_vm_row, 43:48] <- VFLW_means
+
+#V24-VL
+
+# Select the row where the plot code is "V4-VL"
+v24_vl_row <- which(master_NA$plotcode == "V24-VL")
+
+# Fill in columns 5 to 10 with the calculated means for the selected row
+master_NA[v24_vl_row, 43:48] <- VFLW_means
+
+
+#Village, Land_use, Burned
+
+# Fill in the 20th column with "Fallow-derived vanilla" for the selected rows
+master_NA[v24_vl_row, "Land use type"] <- "Fallow-derived vanilla"
+master_NA[v2_vm_row, "Land use type"] <- "Fallow-derived vanilla"
+
+# Fill in the Village column with "Andrakata" for the row where the plot code is "V24-VL"
+master_NA[v24_vl_row, "Village"] <- "Andrakata"
+
+# Fill in the Village column with "Ambavala" for the row where the plot code is "V2-VM"
+master_NA[v2_vm_row, "Village"] <- "Ambavala"
+
+# Fill in the 22nd column with "yes" for the selected rows
+master_NA[v24_vl_row, "Burned yes.no"] <- "yes"
+master_NA[v2_vm_row, "Burned yes.no"] <- "yes"
+
+# Fill in the column with "0" for the trees count for #V2-VM and #V24-VL
+
+master_NA[v24_vl_row, "tree.sp.a"] <- 0
+master_NA[v24_vl_row, "tree.sp.e"] <- 0
+master_NA[v2_vm_row, "tree.sp.e"] <- 0
+master_NA[v2_vm_row, "tree.sp.a"] <- 0
+
+
+
+
+
+
+
+
+#########################
+
+
+
+
+
+#########################
+
+#LOAD BIODIVERSITY ORIGIN
+
+#########################
+
+
+
+
+
+#########################
+
+
+
+
+
+
+##########
+
+#NEW HERBS
+
+##########
+
+#Data from Land-use intensification increases richness of native 
+#And exotic herbaceous plants, but not endemics, in Malagasy vanilla landscapes
+
+#https://datadryad.org/stash/dataset/doi:10.5061/dryad.pzgmsbcjp
+
+# Specify the directory containing the data
+file_path_all_Herbs <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/Herbs/Data_species_by_site_matrix__final.csv"
+
+# Import the Herbs Data_species_by_site_matrix__final
+all_Herbs <- read.csv(file_path_all_Herbs, header = TRUE)
+
+# Copy the first five columns to a new data frame
+first_seven_columns <- all_Herbs[, 1:5]
+
+# Convert the rest of the columns to presence/absence
+presence_absence_df <- as.data.frame(lapply(all_Herbs[, -c(1:5)], function(x) as.integer(x > 0)))
+
+# Combine the first three columns with the presence/absence data frame
+all_Herbs <- cbind(first_seven_columns, presence_absence_df)
+
+
+
+# Get the plot code columns
+plot_codes <- colnames(all_Herbs)[grepl("PF|FF|HF|RP|VH|VL|VM|WF", colnames(all_Herbs))]
+
+# Create a list to store the results
+results <- list()
+
+# Loop over the plot code columns
+for (plot_code in plot_codes) {
+  # Summarize the data for the current plot code
+  summary <- all_Herbs %>%
+    group_by(species.origin) %>%
+    summarize(count = sum(!!sym(plot_code))) %>%
+    spread(species.origin, count)
+  
+  # Add the summary to the results list
+  results[[plot_code]] <- summary
+}
+
+# Combine the results into a single data frame
+Herbs_origin <- bind_rows(results, .id = "plotcode")
+
+# Rename the columns
+colnames(Herbs_origin)[colnames(Herbs_origin) == "Endemic"] <- "EndemicHerbs"
+colnames(Herbs_origin)[colnames(Herbs_origin) == "Exotic"] <- "ExoticHerbs"
+colnames(Herbs_origin)[colnames(Herbs_origin) == "Native"] <- "NativeNonEndemicHerbs"
+colnames(Herbs_origin)[colnames(Herbs_origin) == "Unknown origin "] <- "UnknownOriginHerbs"
+
+# Add a new column 'All_Herbs' to the 'Herbs_origin' data frame
+Herbs_origin$AllHerbs <- Herbs_origin$EndemicHerbs + Herbs_origin$ExoticHerbs + Herbs_origin$NativeNonEndemicHerbs
+
+# Replace all "." by "-" in the column names
+Herbs_origin$plotcode <- gsub("\\.", "-", Herbs_origin$plotcode)
+
+
+Herbs_origin$plotcode[1:10] <- master_NA$plotcode[1:10]
+
+##########
+
+#NEW Tree
+
+##########
+
+
+#############################
+
+#Had to combine two data set 
+
+#############################
+
+#1 trees in vanilla agroforestry_Appendix_S11.csv
+#From https://osf.io/24z6p/
+#For species origin ( Endemic/Native ect ) information 
+
+
+
+#2 tree_species_by_site_matrix - Nature_communications_Wurz_etal.csv
+#From https://osf.io/j54fx/?view_only=1bd699c5cda64023963e058254a33eec
+#For plotcode count 
+
+
+#Import #1 
+
+# Set the file path
+file_path_Tree_Origin <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/Trees/trees in vanilla agroforestry_Appendix_S11.csv"
+
+# Read the data from the CSV file into a data frame
+Tree_Origin <- read.csv(file_path_Tree_Origin, header = TRUE)
+
+
+
+#Import #2
+
+# Set the file path
+file_path_Tree_plotcode_count  <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/Trees/tree_species_by_site_matrix - Nature_communications_Wurz_etal.csv"
+
+# Read the data from the CSV file into a data frame
+Tree_plotcode_count <- read.csv(file_path_Tree_plotcode_count, sep = ";", header = TRUE)
+
+
+
+
+
+###
+
+# Replace all "." by "-" in the column names
+colnames(Tree_plotcode_count) <- gsub("\\.", "-", colnames(Tree_plotcode_count))
+
+# Rename the first column of the Tree_Origin data frame
+colnames(Tree_Origin)[1] <- "species"
+colnames(Tree_Origin)[4] <- "origin"
+
+# Extract the species and origin information from the Tree_Origin data frame
+species_info <- Tree_Origin[, c("species", "origin")]
+
+
+# Merge the species information with the Tree_plotcode_count data frame
+merged_tree <- merge(Tree_plotcode_count, species_info, by = "species")
+
+# Rearrange the columns in the merged data frame
+merged_tree <- merged_tree[, c("species", "origin", setdiff(colnames(merged_tree), c("species", "origin")))]
+
+
+# Get the plot code columns
+plot_codes <- colnames(merged_tree)[grepl("PF|FF|HF|RP|VH|VL|VM|WF", colnames(merged_tree))]
+
+# Create a list to store the results
+results <- list()
+
+# Loop over the plot code columns
+for (plot_code in plot_codes) {
+  # Summarize the data for the current plot code
+  summary <- merged_tree %>%
+    group_by(origin) %>%
+    summarize(count = sum(!!sym(plot_code))) %>%
+    spread(origin, count)
+  
+  # Add the summary to the results list
+  results[[plot_code]] <- summary
+}
+
+Tree_origin <- bind_rows(results, .id = "plot_code")
+colnames(Tree_origin)[colnames(Tree_origin) == "plot_code"] <- "plotcode"
+
+# Load the dplyr package
+library(dplyr)
+
+# renaming the plotcode
+Tree_origin<- Tree_origin %>%
+  mutate(plotcode = case_when(
+    plotcode == "MT-PF1" ~ "MT-OGF1",
+    plotcode == "MT-PF2" ~ "MT-OGF2",
+    plotcode == "MT-PF3" ~ "MT-OGF3",
+    plotcode == "MT-PF4" ~ "MT-OGF4",
+    plotcode == "MT-PF5" ~ "MT-OGF5",
+    plotcode == "ME-PF1" ~ "ME-OGF1",
+    plotcode == "ME-PF2" ~ "ME-OGF2",
+    plotcode == "ME-PF3" ~ "ME-OGF3",
+    plotcode == "ME-PF4" ~ "ME-OGF4",
+    plotcode == "ME-PF5" ~ "ME-OGF5",
+    TRUE ~ plotcode
+  ))
+
+
+# Rename the columns in the Tree_origin data frame
+colnames(Tree_origin)[colnames(Tree_origin) == "endemic"] <- "EndemicTrees"
+colnames(Tree_origin)[colnames(Tree_origin) == "introduced"] <- "ExoticTrees"
+colnames(Tree_origin)[colnames(Tree_origin) == "native"] <- "NativeNonEndemicTrees"
+colnames(Tree_origin)[colnames(Tree_origin) == "unknown"] <- "UnknownOriginTrees"
+
+
+
+
+# Add a new column 'All_Trees' to the 'Tree_origin' data frame
+Tree_origin$AllTrees <- Tree_origin$EndemicTrees + Tree_origin$ExoticTrees + Tree_origin$NativeNonEndemicTrees
+
+
+#Tree_origin has 58 rows 
+#2 withdrew V24-VL and V2-VM 
+#10 missing Rice paddy = 0 
+#10 missing Herbaceous fallow = 0 
+
+
+Worked_bio<- merge(Herbs_origin, Tree_origin, by= "plotcode", all = TRUE)
+# Replace all NA values with 0's
+Worked_bio[is.na(Worked_bio)] <- 0
+
+Worked_bio$UnknownOriginHerbs <- NULL
+Worked_bio$UnknownOriginTrees <- NULL
+
+
+
+
+
+
+##########
+
+#NEW BIRDS
+
+##########
+
+#Data from 
+#Bird diversity and endemism along a land-use gradient in Madagascar
+#: the conservation value of vanilla agroforests
+#https://datadryad.org/stash/dataset/doi:10.5061/dryad.83bk3j9nm
+
+
+################
+
+#Data set import#2 has the count by plot and origin but 10 plots are missing 
+#Need to take the missing information from data set import#1
+
+################
+
+
+
+#Import #1 
+
+# Set the file path
+file_path_Bird_plot_count <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/birds/DATA_species_by_site_matrix.csv"
+
+# Read the data from the CSV file into a data frame
+Bird_plot_count <- read.csv(file_path_Bird_plot_count, header = TRUE)
+
+
+# Replace all "." by "-" in the column names
+colnames(Bird_plot_count) <- gsub("\\.", "-", colnames(Bird_plot_count))
+
+# Rename the first column of the 'Bird_plot_count' data frame
+colnames(Bird_plot_count)[1] <- "Species"
+
+
+
+
+#Import #2 
+
+# Set the file path
+file_path_Bird_Origin <- "/Users/hugo/Desktop/madagascar/DiversityTurndata /osfstorage-archive/bird_species_by_site_matrix - Nature_communications_Wurz_etal.csv"
+
+# Read the data from the CSV file into a data frame
+Bird_Origin <- read.csv(file_path_Bird_Origin, header = TRUE)
+
+
+# Replace all "." by "-" in the column names
+colnames(Bird_Origin) <- gsub("\\.", "-", colnames(Bird_Origin))
+
+
+# Merge the species information with the Bird_plot_count data frame
+Birds_origin <- as.data.frame(c(Bird_Origin[,2:3], Bird_plot_count[,-1]))
+
+# Update the 'origin' column for the "Helmeted Guineafowl" and "Common Mynah" species
+Birds_origin$origin[Birds_origin$Species == "helmeted guineafowl"] <- "Exotic"
+Birds_origin$origin[Birds_origin$Species == "common myna"] <- "Exotic"
+
+
+
+# Get the plot code columns
+plot_codes <- colnames(Birds_origin)[grepl("GF|PF|FF|HF|RP|VH|VL|VM|WF", colnames(Birds_origin))]
+
+# Create a list to store the results
+results <- list()
+
+# Loop over the plot code columns
+for (plot_code in plot_codes) {
+  # Summarize the data for the current plot code
+  summary <- Birds_origin %>%
+    group_by(origin) %>%
+    summarize(count = sum(!!sym(plot_code))) %>%
+    spread(origin, count)
+  
+  # Add the summary to the results list
+  results[[plot_code]] <- summary
+}
+
+# Combine the results into a single data frame
+Birds_origin <- bind_rows(results, .id = "plot_code")
+
+
+
+# Replace all "." by "-" in the column plot_code
+# 
+
+# Replace all "." with "-" in the 'plot_code' column
+Birds_origin$plot_code <- gsub("\\.", "-", Birds_origin$plot_code)
+
+
+
+# Add a new column Endemic to the 'Tree_origin' data frame
+Birds_origin$Endemic <- Birds_origin$family + Birds_origin$genera + Birds_origin$subfamily+Birds_origin$species
+Birds_origin$AllBirds <- Birds_origin$Endemic + Birds_origin$nonendemic + Birds_origin$Exotic
+
+# Rename the columns
+colnames(Birds_origin)[colnames(Birds_origin) == "Endemic"] <- "EndemicBirds"
+colnames(Birds_origin)[colnames(Birds_origin) == "Exotic"] <- "ExoticBirds"
+colnames(Birds_origin)[colnames(Birds_origin) == "nonendemic"] <- "NativeNonEndemicBirds"
+colnames(Birds_origin)[colnames(Birds_origin) == "Unknown origin "] <- "UnknownOriginBirds"
+colnames(Birds_origin)[colnames(Birds_origin) == "plot_code"] <- "plotcode"
+
+
+
+
+# Create a new data frame 'new_Birds_origin' with columns 1, 2, 5, 9, and 10 from 'Birds_origin'
+Birds_origin <- Birds_origin[, c(1, 2, 5, 9, 10)]
+
+#######
+#Warning : sometimes 1 species of difference between 
+#Birds_origin and "master_NA" because of vasa parrot sp
+Birds_origin$plotcode[1:10] <- master_NA$plotcode[1:10]
+
+
+Worked_bio<- merge(Worked_bio, Birds_origin, by= "plotcode", all = TRUE)
+
+
+##########
+
+#NEW ANTS
+
+##########
+
+
+
+file_path_Ants <- "/Users/hugo/Desktop/madagascar/Biodiversity_data/Ants/ant_richness_enviro.csv"
+
+# Read the data from the CSV file into a data frame
+Ants_origin <- read.csv(file_path_Ants, header = TRUE)
+
+Ants_origin <- Ants_origin[, c("plotcode", "richness_overall", "richness_exotic", "richness_endemic", "richness_non_endemic")]
+
+# Rename the columns of the 'Ants_origin' data frame
+colnames(Ants_origin)[colnames(Ants_origin) == "richness_endemic"] <- "EndemicAnts"
+colnames(Ants_origin)[colnames(Ants_origin) == "richness_exotic"] <- "ExoticAnts"
+colnames(Ants_origin)[colnames(Ants_origin) == "richness_non_endemic"] <- "NativeNonEndemicAnts"
+colnames(Ants_origin)[colnames(Ants_origin) == "richness_overall"] <- "AllAnts"
+colnames(Ants_origin)[colnames(Ants_origin) == "plot_code"] <- "plotcode"
+
+
+Ants_origin$AllAnts <- Ants_origin$EndemicAnts + Ants_origin$NativeNonEndemicAnts + Ants_origin$ExoticAnts
+
+Ants_origin$plotcode[1:10] <- master_NA$plotcode[1:10]
+
+Worked_bio<- merge(Worked_bio, Ants_origin, by= "plotcode", all = TRUE)
+
+
+
+###############
+
+#FROM master_NA
+
+###############
+
+# Select the columns
+master_NA_bio <- master_NA[, c("plotcode", "butf.sp.e", "butf.sp.a", "rept.sp.e", "rept.sp.a", "amph.sp.e", "amph.sp.a")]
+
+# Rename the columns
+colnames(master_NA_bio) <- c("plotcode", "EndemicButterflies", "AllButterflies", "EndemicReptiles", "AllReptiles", "EndemicAmphibians", "AllAmphibians")
+
+# Load the dplyr package
+library(dplyr)
+
+master_NA <- master_NA %>%
+  select(-c("bird.sp.a", "bird.sp.e", "butf.sp.e", "butf.sp.a", "hpla.sp.e", "hpla.sp.a", "rept.sp.e", "rept.sp.a", "tree.sp.a", "tree.sp.e", "ant.sp.a", "ant.sp.e", "amph.sp.e", "amph.sp.a"))
+
+########
+
+#Warning 
+
+########
+############################################################################
+
+
+# There is no exotic Butterflies, Reptiles neither Amphibians
+# So the difference between Endemic and All is a "native non endemic specie"
+
+#############################################################################
+
+# Lets create those "NativeNonEndemic" and "Exotic" columns 
+
+# Create new columns
+master_NA_bio$NativeNonEndemicButterflies <- master_NA_bio$AllButterflies - master_NA_bio$EndemicButterflies
+master_NA_bio$NativeNonEndemicReptiles <- master_NA_bio$AllReptiles - master_NA_bio$EndemicReptiles
+master_NA_bio$NativeNonEndemicAmphibians <- master_NA_bio$AllAmphibians - master_NA_bio$EndemicAmphibians
+
+# Create new columns and fill them with zeros
+
+master_NA_bio$ExoticButterflies <- 0
+master_NA_bio$ExoticReptiles <- 0
+master_NA_bio$ExoticAmphibians <- 0
+
+# Reorder columns
+master_NA_bio <- master_NA_bio[, c("plotcode", 
+                                   "EndemicButterflies", "NativeNonEndemicButterflies", "ExoticButterflies", "AllButterflies",
+                                   "EndemicReptiles", "NativeNonEndemicReptiles","ExoticReptiles", "AllReptiles",
+                                   "EndemicAmphibians", "NativeNonEndemicAmphibians", "ExoticAmphibians", "AllAmphibians")]
+
+
+
+
+#################################
+
+#JOIN master_NA_BIO and WORKED_BIO
+
+#################################
+
+
+
+Worked_bio$plotcode[1:10] <- master_NA$plotcode[1:10]
+
+All_bio<- merge(master_NA_bio, Worked_bio, by= "plotcode", all = TRUE)
+
+
+# last check if everything is ok 
+
+# Check if "All" is the sum of "Exotic", "Endemic", and "NativeNonEndemic" for each taxa
+check_sum <- function(df, taxa) {
+  all_col <- paste("All", taxa, sep="")
+  endemic_col <- paste("Endemic", taxa, sep="")
+  exotic_col <- paste("Exotic", taxa, sep="")
+  non_endemic_col <- paste("NativeNonEndemic", taxa, sep="")
+  
+  return(all(df[[all_col]] == df[[endemic_col]] + df[[exotic_col]] + df[[non_endemic_col]]))
+}
+
+taxa <- c("Butterflies", "Reptiles", "Amphibians", "Herbs", "Trees", "Birds", "Ants")
+results <- sapply(taxa, check_sum, df=All_bio)
+
+# Print the results
+print(results)
+
+#Hallelujah
+#Butterflies    Reptiles  Amphibians       Herbs       Trees       Birds        Ants 
+#TRUE        TRUE        TRUE        TRUE        TRUE        TRUE        TRUE 
+###################################################################################################
+
+################
+
+#JOIN All_BIO 
+
+################
+
+master_NA <- merge(master_NA, All_bio, by= "plotcode", all = TRUE)
+
+colnames(master_NA)[2] <- "Lutfire"
+
+
+
+################################
+
+
+#Define_taxa 
+
+
+################################
+
+
+library(lme4)
+library(ggeffects)
+
+
+# List of all taxa
+all_taxa <- c(
+  "AllButterflies", "EndemicButterflies", "NativeNonEndemicButterflies",
+  "AllReptiles", "EndemicReptiles", "NativeNonEndemicReptiles",
+  "AllAmphibians", "EndemicAmphibians", "NativeNonEndemicAmphibians",
+  "AllHerbs", "EndemicHerbs", "ExoticHerbs", "NativeNonEndemicHerbs",
+  "AllTrees", "EndemicTrees", "ExoticTrees", "NativeNonEndemicTrees",
+  "AllAnts", "ExoticAnts", "EndemicAnts", "NativeNonEndemicAnts",
+  "AllBirds", "ExoticBirds", "EndemicBirds", "NativeNonEndemicBirds"
+)
+
+
+seq(100, 1000, by = 100)
+
+
+
+################################
+
+
+# SCALE DATA TDNA
+
+
+################################
+
+
+# Define the column names for columns 6 to 25
+cols <- names(master_NA)[6:25]
+
+master_NA[is.na(master_NA)] <- 0
+
+# Scale columns 6 to 25 and replace NaN values with 0
+scaled_df_tdNA <- as.data.frame(scale(master_NA[, cols]))
+
+# Define the column names for columns 35 to 62
+cols_bio <- names(master_NA)[35:62]
+
+# Scale columns 35 to 62, replace NaN values with 0, and add them to scaled_df_tdNA
+scaled_df_tdNA[, cols_bio] <- scale(master_NA[, cols_bio])
+
+
+# Add the 'Land use type' column to scaled_df_tdNA
+scaled_df_tdNA$Lutfire <- master_NA$"Lutfire"
+scaled_df_tdNA$Village <- master_NA$"Village"
+
+
+##############################
+
+
+#FIT BEST MODELS FROM 
+#MODELS COMPARISON
+
+
+##############################
+
+
+
+
+
+##############################
+
+# MODELS 4
+
+# SIMPLE TERM FC
+# SQUARE TERM TD 
+# NO INTERACTION 
+
+
+##############################
+
+
+distances <- seq(100, 1000, by = 100)
+
+# Initialize lists to store the models_tdNA at the scale of effect
+poly_model_list_singular_fit_at_scale_of_effect_tdNA <- list()
+poly_model_list_no_singular_fit_at_scale_of_effect_tdNA <- list()
+
+# Loop over each taxa
+for (taxa in all_taxa) {
+  # Initialize vectors to store the coefficients and AICs
+  coefficients <- c()
+  aics <- c()
+  models_tdNA <- list()
+  
+  # Loop over each distance
+  for (distance in distances) {
+    # Construct the variable names
+    mean_td_var <- paste0("mean_td_", distance, "m")
+    mean_fc_var <- paste0("mean_fc_", distance, "m")
+    
+    
+    # Fit the model_tdNA using the scaled variables
+    # Fit a mixed-effects model_tdNA
+    formula <- as.formula(paste(taxa, "~ poly(", mean_td_var, ", 2) + ", mean_fc_var, " + `Lutfire` +", "(1|Village)"))
+    model_tdNA <- lmer(formula, data = scaled_df_tdNA)
+    
+    # Store the model_tdNA, coefficients, and AIC
+    models_tdNA[[as.character(distance)]] <- model_tdNA
+    coefficients <- c(coefficients, coef(model_tdNA)[2])
+    aics <- c(aics, AIC(model_tdNA))
+  }
+  
+  # Identify the scale of effect and the scale with the lowest AIC
+  scale_of_effect <- distances[which.min(aics)]
+  
+  # Check if the model_tdNA at the scale of effect has a singular fit
+  if (isSingular(models_tdNA[[as.character(scale_of_effect)]])) {
+    # If it does, add it to the list of models_tdNA with a singular fit
+    model_tdNA_name <- paste(taxa, "at", scale_of_effect, "m", sep = "_")
+    poly_model_list_singular_fit_at_scale_of_effect_tdNA[[model_tdNA_name]] <- models_tdNA[[as.character(scale_of_effect)]]
+  } else {
+    # If it doesn't, add it to the list of models_tdNA without a singular fit
+    model_tdNA_name <- paste(taxa, "at", scale_of_effect, "m", sep = "_")
+    poly_model_list_no_singular_fit_at_scale_of_effect_tdNA[[model_tdNA_name]] <- models_tdNA[[as.character(scale_of_effect)]]
+  }
+}
+
+# Print the names of the models_tdNA at the scale of effect with a singular fit
+cat("models_tdNA at the scale of effect with a singular fit:\n")
+print(names(poly_model_list_singular_fit_at_scale_of_effect_tdNA))
+
+# Print the names of the models_tdNA at the scale of effect without a singular fit
+cat("models_tdNA at the scale of effect without a singular fit:\n")
+print(names(poly_model_list_no_singular_fit_at_scale_of_effect_tdNA))
+
+
+best_models_tdNA <- c(poly_model_list_singular_fit_at_scale_of_effect_tdNA, poly_model_list_no_singular_fit_at_scale_of_effect_tdNA )
+
+#####################################################################################################################################################################  
+
+
+# EXTRACT PREDICTIONS  + CONFIDENCE INTERVAL 
+# WITH GGEFFECT 
+
+
+#####################################################################################################################################################################  
+
+
+# Initialize an empty list to store data frames
+terms_list <- list()
+
+# Loop over each model in the list
+for (model_name in names(best_models_tdNA)) {
+  
+  # Get the current model
+  current_model <- best_models_tdNA[[model_name]]
+  
+  # Extract terms and variables from the model's formula
+  all_vars <- all.vars(formula(current_model))
+  first_explanatory_var <- all_vars[2]
+  first_term <- all_vars[1]
+  
+  # Create a data frame with the first explanatory variable
+  terms_df <- data.frame(matrix(ncol = 1, nrow = 13))
+  colnames(terms_df) <- first_explanatory_var
+  terms_df[, first_explanatory_var] <- seq(0, 60, by = 5)  # replace with desired values
+  
+  # Convert to numeric
+  terms_df[, first_explanatory_var] <- as.numeric(as.character(terms_df[, first_explanatory_var]))
+  
+  # Rerun the model with the same formula but for the data = "master_NA"
+  unscaled_model <- lmer(formula(current_model), data = master_NA)
+  
+  # Use ggpredict to get predictions
+  predictions <- ggeffect(unscaled_model, terms = terms_df, ci_level = 0.95)
+  
+  # Store the results in a data frame named Gain_Loss_"first_term"
+  gain_loss_df <- data.frame(
+    td_in_year = predictions$x
+  )
+  gain_loss_df[[paste0("predicted_value_", first_term)]] <- predictions$predicted
+  gain_loss_df[[paste0("conf_low_", first_term)]] <- predictions$conf.low
+  gain_loss_df[[paste0("conf_high_", first_term)]] <- predictions$conf.high
+  
+  
+  # Store the data frame in the list
+  terms_list[[paste0("Gain_Loss_", first_term)]] <- gain_loss_df
+}
+
+# Combine data frames in the terms_list
+predictions_0_to_60 <- Reduce(function(x, y) merge(x, y, by = "td_in_year", all = TRUE), terms_list)
+
+
+
+#####################################################################################################################################################################  
+
+# GAIN LOSS 
+
+#####################################################################################################################################################################  
+
+
+
+
+# Initialize an empty dataframe to store results
+result_dataframe <- data.frame()
+
+# Loop through each taxa
+for (taxon in predictions_taxa) {
+  # Calculate difference between predicted values at td = 0 and td = 60
+  difference <- predictions_0_to_60[[paste0("predicted_value_", taxon)]][predictions_0_to_60$td_in_year == 60] - predictions_0_to_60[[paste0("predicted_value_", taxon)]][predictions_0_to_60$td_in_year == 0]
+  
+  # Check if confidence intervals overlap
+  overlap <- ifelse(predictions_0_to_60[[paste0("conf_low_", taxon)]][predictions_0_to_60$td_in_year == 0] <= 
+                      predictions_0_to_60[[paste0("conf_high_", taxon)]][predictions_0_to_60$td_in_year == 60] &
+                      predictions_0_to_60[[paste0("conf_high_", taxon)]][predictions_0_to_60$td_in_year == 0] >= 
+                      predictions_0_to_60[[paste0("conf_low_", taxon)]][predictions_0_to_60$td_in_year == 60], 
+                    "Overlap", "No overlap")
+  
+  # Create a temporary dataframe for current taxon
+  temp_dataframe <- data.frame(Taxon = taxon, Difference_0_to_60 = difference, C.I_Overlap = overlap)
+  
+  # Append the temporary dataframe to the result dataframe
+  result_dataframe <- rbind(result_dataframe, temp_dataframe)
+}
+
+# Print the result dataframe
+print(result_dataframe)
+
+
+
+
+#####################################################################################################################################################################  
+
+# EXPORT 
+
+#####################################################################################################################################################################  
+
+
+write.csv(master_NA, "unscaled_data_tdNA", row.names = TRUE)
+write.csv(scaled_df_tdNA, "scaled_data_tdNA", row.names = TRUE)
+write.csv(predictions_0_to_60, "predictions_0_to_60", row.names = TRUE)
+write.csv(result_dataframe, "result_dataframe", row.names = TRUE)
+
+
+
+
+
+
+view(best_models_1)
